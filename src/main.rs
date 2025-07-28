@@ -4,7 +4,6 @@ use rdev::{listen, EventType};
 use serde::{Deserialize, Serialize};
 use exit_for_enter::exit_for_enter;
 
-mod keycode;
 use keycode::Keyboard;
 
 #[derive(Deserialize, Serialize)]
@@ -92,6 +91,15 @@ fn main() {
             println!("{} 释放", config.simulate_key);
             *simulating = false;
           };
+        }
+        if event.event_type == EventType::KeyPress(config.simulate_key.into()) {
+          let mut simulating = state_clone.lock().expect("无法获取is_simulating变量的互斥锁");
+          if *simulating {
+            let mut enigo = enigo_clone.lock().expect("无法获取Enigo实例的互斥锁");
+            enigo.key(config.simulate_key.into(), Direction::Release).expect("无法释放按键");
+            println!("{} 释放", config.simulate_key);
+            *simulating = false;
+          }
         }
       }
     ).expect("监听按键失败")
