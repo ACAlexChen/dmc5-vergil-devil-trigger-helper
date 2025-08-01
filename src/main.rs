@@ -102,9 +102,9 @@ fn main() {
             let mut enigo = enigo_clone.lock().expect("无法获取Enigo实例的互斥锁");
             if !*simulating {
               if let Key::Keyboard(value) = config.simulate_key {
-                enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                enigo.key(value.try_into().unwrap(), Direction::Press).expect("无法按下按键");
               } else if let Key::Mouse(value) = config.simulate_key {
-                enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                enigo.button(value.try_into().unwrap(), Direction::Press).expect("无法按下按键");
               }
               println!("{:?} 按下", config.simulate_key);
               *simulating = true;
@@ -179,9 +179,9 @@ fn main() {
             let mut enigo = enigo_clone.lock().expect("无法获取Enigo实例的互斥锁");
             if !*simulating {
               if let Key::Keyboard(value) = config.simulate_key {
-                enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                enigo.key(value.try_into().unwrap(), Direction::Press).expect("无法按下按键");
               } else if let Key::Mouse(value) = config.simulate_key {
-                enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                enigo.button(value.try_into().unwrap(), Direction::Press).expect("无法按下按键");
               }
               println!("{:?} 按下", config.simulate_key);
               *simulating = true;
