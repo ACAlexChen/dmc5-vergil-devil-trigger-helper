@@ -1,41 +1,41 @@
 use std::{env::current_dir, fs::File, io::{Read, Write}, panic, str::FromStr, sync::{Arc, Mutex}, thread, time::Duration};
-use enigo::{Direction, Enigo, Keyboard as _, Settings};
+use enigo::{Direction, Enigo, Keyboard as _, Mouse, Settings};
 use rdev::{listen, EventType};
 use serde::{Deserialize, Serialize};
 use exit_for_enter::exit_for_enter;
 
-use keycode::Keyboard;
+use keycode::{Key, Keyboard};
 
 #[derive(Deserialize, Serialize)]
 struct Config {
-  listen_key: Keyboard,
-  simulate_key: Keyboard
+  listen_key: Key,
+  simulate_key: Key
 }
 
 impl Default for Config {
   fn default() -> Self {
     Self {
-      listen_key: Keyboard::G,
-      simulate_key: Keyboard::F
+      listen_key: Key::Keyboard(Keyboard::G),
+      simulate_key: Key::Keyboard(Keyboard::F)
     }
   }
 }
 
 impl FromStr for Config {
-  type Err = serde_json::Error;
+  type Err = anyhow::Error;
   fn from_str(s: &str) -> Result<Self, Self::Err> {
-    serde_json::from_str(s)
+    Ok(toml::from_str(s)?)
   }
 }
 
 impl Config {
-  pub fn to_string(&self) -> serde_json::Result<String> {
-    serde_json::to_string(self)
+  pub fn to_string(&self) -> anyhow::Result<String> {
+    Ok(toml::to_string(self)?)
   }
 }
 
 fn main() {
-  let config_path = current_dir().expect("无法获取程序所在目录").join("config.json");
+  let config_path = current_dir().expect("无法获取程序所在目录").join("config.toml");
   let mut config_file = File::options().read(true).write(true).create(true).open(config_path).expect("无法打开配置文件");
   let mut config_content = String::new();
   config_file.read_to_string(&mut config_content).expect("无法读取配置文件内容");
@@ -64,61 +64,183 @@ fn main() {
     let simulating = is_simulating.lock().unwrap();
     let mut enigo = enigo.lock().unwrap();
     if *simulating {
-      enigo.key(config.simulate_key.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+      if let Key::Keyboard(value) = config.simulate_key {
+        enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+      } else if let Key::Mouse(value) = config.simulate_key {
+        enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+      }
     }
   }));
   ctrlc::set_handler(move || {
     let simulating = state_clone_second.lock().unwrap();
     let mut enigo = enigo_clone_second.lock().unwrap();
     if *simulating {
-      enigo.key(config.simulate_key.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+      if let Key::Keyboard(value) = config.simulate_key {
+        enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+      } else if let Key::Mouse(value) = config.simulate_key {
+        enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+      }
     }
   }).expect("无法设置 Ctrl+C 处理程序");
 
-  println!("当前监听的按键：{}，当前模拟的按键：{}", config.listen_key, config.simulate_key);
+  println!("当前监听的按键：{:?}，当前模拟的按键：{:?}", config.listen_key, config.simulate_key);
 
   thread::spawn(move || {
     listen(
       move |event| {
-        if event.event_type == EventType::KeyPress(config.listen_key.try_into().unwrap()) {
-          println!("{} 触发", config.listen_key);
-          let mut released = release_state_clone.lock().expect("无法获取listen_key_released变量的互斥锁");
-          if *released {
-            *released = false
-          } else {
-            return
-          }
-          drop(released);
-          let mut simulating = state_clone.lock().expect("无法获取is_simulating变量的互斥锁");
-          let mut enigo = enigo_clone.lock().expect("无法获取Enigo实例的互斥锁");
-          if !*simulating {
-            enigo.key(config.simulate_key.try_into().unwrap(), Direction::Press).expect("无法按下按键");
-            println!("{} 按下", config.simulate_key);
-            *simulating = true;
-          } else {
-            enigo.key(config.simulate_key.try_into().unwrap(), Direction::Release).expect("无法释放按键");
-            println!("{} 释放", config.simulate_key);
-            *simulating = false;
-          };
-        } else if event.event_type == EventType::KeyPress(config.simulate_key.try_into().unwrap()) {
-          let released = release_state_clone.lock().expect("无法获取listen_key_released变量的互斥锁");
-          if !*released {
-            return
-          }
-          drop(released);
-          let mut simulating = state_clone.lock().expect("无法获取is_simulating变量的互斥锁");
-          if *simulating {
+        if let Key::Keyboard(value) = config.listen_key {
+          if event.event_type == EventType::KeyPress(value.try_into().unwrap()) {
+            println!("{:?} 触发", config.listen_key);
+            let mut released = release_state_clone.lock().expect("无法获取listen_key_released变量的互斥锁");
+            if *released {
+              *released = false
+            } else {
+              return
+            }
+            drop(released); // 为了防止死锁我也是尽心尽力了
+            let mut simulating = state_clone.lock().expect("无法获取is_simulating变量的互斥锁");
             let mut enigo = enigo_clone.lock().expect("无法获取Enigo实例的互斥锁");
-            enigo.key(config.simulate_key.try_into().unwrap(), Direction::Release).expect("无法释放按键");
-            println!("{} 释放", config.simulate_key);
-            *simulating = false;
-          }
-        } else if event.event_type == EventType::KeyRelease(config.listen_key.try_into().unwrap()) { // 记录一下，这个bug劳资排了两小时才排出来解决方案，sb程序一跑起来电脑直接卡死
-          let mut released = release_state_clone.lock().expect("无法获取listen_key_released变量的互斥锁");
-          if *released {
-            return
+            if !*simulating {
+              if let Key::Keyboard(value) = config.simulate_key {
+                enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+              } else if let Key::Mouse(value) = config.simulate_key {
+                enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+              }
+              println!("{:?} 按下", config.simulate_key);
+              *simulating = true;
+            } else {
+              if let Key::Keyboard(value) = config.simulate_key {
+                enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+              } else if let Key::Mouse(value) = config.simulate_key {
+                enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+              }
+              println!("{:?} 释放", config.simulate_key);
+              *simulating = false;
+            };
+          } else if event.event_type == EventType::KeyRelease(value.try_into().unwrap()) { // 记录一下，这个bug劳资排了两小时才排出来解决方案，sb程序一跑起来电脑直接卡死
+            let mut released = release_state_clone.lock().expect("无法获取listen_key_released变量的互斥锁");
+            if *released {
+              return
+            } else {
+              *released = true
+            }
           } else {
-            *released = true
+            if let Key::Keyboard(v) = config.simulate_key {
+              if event.event_type == EventType::KeyPress(v.try_into().unwrap()) {
+                let released = release_state_clone.lock().expect("无法获取listen_key_released变量的互斥锁");
+                if !*released {
+                  return
+                }
+                drop(released);
+                let mut simulating = state_clone.lock().expect("无法获取is_simulating变量的互斥锁");
+                if *simulating {
+                  let mut enigo = enigo_clone.lock().expect("无法获取Enigo实例的互斥锁");
+                  if let Key::Keyboard(value) = config.simulate_key {
+                    enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                  } else if let Key::Mouse(value) = config.simulate_key {
+                    enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                  }
+                  println!("{:?} 释放", config.simulate_key);
+                  *simulating = false;
+                }
+              }
+            } else if let Key::Mouse(v) = config.simulate_key {
+              if event.event_type == EventType::ButtonPress(v.try_into().unwrap()) {
+                let released = release_state_clone.lock().expect("无法获取listen_key_released变量的互斥锁");
+                if !*released {
+                  return
+                }
+                drop(released);
+                let mut simulating = state_clone.lock().expect("无法获取is_simulating变量的互斥锁");
+                if *simulating {
+                  let mut enigo = enigo_clone.lock().expect("无法获取Enigo实例的互斥锁");
+                  if let Key::Keyboard(value) = config.simulate_key {
+                    enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                  } else if let Key::Mouse(value) = config.simulate_key {
+                    enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                  }
+                  println!("{:?} 释放", config.simulate_key);
+                  *simulating = false;
+                }
+              }
+            }
+          }
+        } else if let Key::Mouse(value) = config.listen_key {
+          if event.event_type == EventType::ButtonPress(value.try_into().unwrap()) {
+            println!("{:?} 触发", config.listen_key);
+            let mut released = release_state_clone.lock().expect("无法获取listen_key_released变量的互斥锁");
+            if *released {
+              *released = false
+            } else {
+              return
+            }
+            drop(released); // 为了防止死锁我也是尽心尽力了
+            let mut simulating = state_clone.lock().expect("无法获取is_simulating变量的互斥锁");
+            let mut enigo = enigo_clone.lock().expect("无法获取Enigo实例的互斥锁");
+            if !*simulating {
+              if let Key::Keyboard(value) = config.simulate_key {
+                enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+              } else if let Key::Mouse(value) = config.simulate_key {
+                enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+              }
+              println!("{:?} 按下", config.simulate_key);
+              *simulating = true;
+            } else {
+              if let Key::Keyboard(value) = config.simulate_key {
+                enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+              } else if let Key::Mouse(value) = config.simulate_key {
+                enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+              }
+              println!("{:?} 释放", config.simulate_key);
+              *simulating = false;
+            };
+          } else if event.event_type == EventType::ButtonRelease(value.try_into().unwrap()) {
+            let mut released = release_state_clone.lock().expect("无法获取listen_key_released变量的互斥锁");
+            if *released {
+              return
+            } else {
+              *released = true
+            }
+          }else {
+            if let Key::Keyboard(v) = config.simulate_key {
+              if event.event_type == EventType::KeyPress(v.try_into().unwrap()) {
+                let released = release_state_clone.lock().expect("无法获取listen_key_released变量的互斥锁");
+                if !*released {
+                  return
+                }
+                drop(released);
+                let mut simulating = state_clone.lock().expect("无法获取is_simulating变量的互斥锁");
+                if *simulating {
+                  let mut enigo = enigo_clone.lock().expect("无法获取Enigo实例的互斥锁");
+                  if let Key::Keyboard(value) = config.simulate_key {
+                    enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                  } else if let Key::Mouse(value) = config.simulate_key {
+                    enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                  }
+                  println!("{:?} 释放", config.simulate_key);
+                  *simulating = false;
+                }
+              }
+            } else if let Key::Mouse(v) = config.simulate_key {
+              if event.event_type == EventType::ButtonPress(v.try_into().unwrap()) {
+                let released = release_state_clone.lock().expect("无法获取listen_key_released变量的互斥锁");
+                if !*released {
+                  return
+                }
+                drop(released);
+                let mut simulating = state_clone.lock().expect("无法获取is_simulating变量的互斥锁");
+                if *simulating {
+                  let mut enigo = enigo_clone.lock().expect("无法获取Enigo实例的互斥锁");
+                  if let Key::Keyboard(value) = config.simulate_key {
+                    enigo.key(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                  } else if let Key::Mouse(value) = config.simulate_key {
+                    enigo.button(value.try_into().unwrap(), Direction::Release).expect("无法释放按键");
+                  }
+                  println!("{:?} 释放", config.simulate_key);
+                  *simulating = false;
+                }
+              }
+            }
           }
         }
       }
